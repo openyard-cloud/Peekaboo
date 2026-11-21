@@ -1025,6 +1025,9 @@ extension TypeTool {
         guard !element.isOCRSemanticEvidence else {
             throw TypeToolValidationError(OCRSemanticEvidencePolicy.interactionRefusalMessage)
         }
+        if let refusal = ActionGuard.shared.checkTextEntry(role: element.role, roleDescription: element.roleDescription) {
+            throw TypeToolValidationError(refusal)
+        }
 
         return TargetElementContext(snapshot: snapshot, element: element)
     }

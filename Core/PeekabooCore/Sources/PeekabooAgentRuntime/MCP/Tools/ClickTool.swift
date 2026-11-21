@@ -98,6 +98,12 @@ public struct ClickTool: MCPTool {
                     """,
                     minimum: 1,
                     maximum: Int(Int32.max)),
+                "confirm": SchemaBuilder.string(
+                    description: """
+                    Guard confirmation. Consequential targets (Submit, Upload, Distribute, Release, Delete, ...) are \
+                    refused until called again with confirm set to the exact element label from the refusal.
+                    """,
+                    minLength: 1),
                 "modifiers": SchemaBuilder.array(
                     items: SchemaBuilder.string(enum: ["cmd", "shift", "option"]),
                     description: "Foreground-only modifier keys. Requires foreground=true and a fresh exact snapshot."),
@@ -129,6 +135,17 @@ public struct ClickTool: MCPTool {
             let resolution = try await self.resolveClickTarget(for: request)
             snapshotIdToInvalidate = resolution.snapshotIdToInvalidate
             waitedSnapshotID = resolution.queryWait == nil ? nil : resolution.snapshotId
+            var isCoordinateClick = false
+            if case .coordinates = request.target { isCoordinateClick = true }
+            if let refusal = ActionGuard.shared.checkClick(
+                labels: await self.guardLabels(request: request, resolution: resolution),
+                app: resolution.targetApp,
+                isCoordinate: isCoordinateClick,
+                confirm: arguments.getString("confirm"))
+            {
+                // A pre-dispatch refusal, so the response carries the canonical "nothing was sent" outcome.
+                throw ClickToolError(refusal, refusalReason: .invalidRequest)
+            }
             let effectiveTargetProcessIdentity = try await self.backgroundProcessIdentity(
                 request: request,
                 resolution: resolution)
@@ -228,6 +245,19 @@ public struct ClickTool: MCPTool {
     }
 
     // MARK: - Private Helpers
+
+    /// Every name of the click target, for the action guard: an empty title must not hide a label.
+    private func guardLabels(request: ClickRequest, resolution: ClickResolution) async -> [String?] {
+        var labels: [String?] = [resolution.elementLabel]
+        if case let .query(text) = request.target { labels.append(text) }
+        if case let .elementId(id) = resolution.automationTarget,
+           let snapshot = await self.getSnapshot(id: resolution.snapshotId),
+           let element = await snapshot.getElement(byId: id)
+        {
+            labels += [element.title, element.label, element.description, element.help, element.value]
+        }
+        return labels
+    }
 
     private func getSnapshot(id: String?) async -> UISnapshot? {
         await self.context.uiSnapshots.getSnapshot(id: id)
