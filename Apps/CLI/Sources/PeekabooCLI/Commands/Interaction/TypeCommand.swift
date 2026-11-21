@@ -43,6 +43,17 @@ struct TypeCommand: ActionOutputFormattable, ErrorHandlingCommand, OutputFormatt
     @Flag(help: "Accept dispatched but unverified typing as success; observe before retrying")
     var acceptDispatched = false
 
+    /// openyard fork: read a secret (password, one-time code) from stdin instead of argv, type it
+    /// literally, and never echo it in any output.
+    @Flag(name: .customLong("secret-stdin"), help: TypeCommand.secretStdinHelp)
+    var secretStdin = false
+
+    /// The secret read from stdin when --secret-stdin is set. Read once, at argument binding.
+    var secretText: String?
+
+    static let secretStdinHelp =
+        "Read the text from stdin (not argv), type it literally, and redact it from all output"
+
     @OptionGroup var target: InteractionTargetOptions
 
     @OptionGroup var focusOptions: FocusCommandOptions
@@ -50,6 +61,9 @@ struct TypeCommand: ActionOutputFormattable, ErrorHandlingCommand, OutputFormatt
     var runtimeOptions = CommandRuntimeOptions()
 
     private var resolvedText: String? {
+        if self.secretStdin {
+            return self.secretText
+        }
         if let primary = text, !primary.isEmpty {
             return primary
         }
@@ -243,7 +257,12 @@ struct TypeCommand: ActionOutputFormattable, ErrorHandlingCommand, OutputFormatt
             actions.append(.clear)
         }
 
-        if let textToType = self.resolvedText {
+        if self.secretStdin {
+            guard let secret = self.secretText, !secret.isEmpty else {
+                throw ValidationError("--secret-stdin read nothing from stdin.")
+            }
+            actions.append(.text(secret))
+        } else if let textToType = self.resolvedText {
             actions.append(contentsOf: Self.processTextWithEscapes(textToType))
         }
 
@@ -268,6 +287,9 @@ struct TypeCommand: ActionOutputFormattable, ErrorHandlingCommand, OutputFormatt
         try self.target.validate()
         if self.text != nil, self.textOption != nil {
             throw ValidationError("Provide text either positionally or with --text, not both")
+        }
+        if self.secretStdin, self.text != nil || self.textOption != nil {
+            throw ValidationError("--secret-stdin takes the text from stdin; do not also pass it as an argument")
         }
         try KeyboardDeliverySupport.validateForegroundFlags(
             foreground: self.focusOptions.foreground,
@@ -520,17 +542,17 @@ struct TypeCommand: ActionOutputFormattable, ErrorHandlingCommand, OutputFormatt
         let specialKeys = effectConfirmed
             ? typeResult.specialKeyPresses ?? max(confirmedKeyPresses - confirmedCharacters, 0)
             : 0
-        let confirmedTypedText = effectConfirmed
+        let confirmedTypedText = effectConfirmed && !self.secretStdin
             ? Self.literalTypedText(from: actions, requestedText: self.resolvedText)
             : nil
         let result = TypeCommandResult(
-            requestedText: self.resolvedText,
+            requestedText: self.secretStdin ? nil : self.resolvedText,
             typedText: confirmedTypedText,
             keyPresses: confirmedKeyPresses,
             totalCharacters: confirmedCharacters,
             literalCharactersTyped: confirmedCharacters,
             specialKeyPresses: specialKeys,
-            actions: actions.map(Self.actionSummary),
+            actions: actions.map { self.secretStdin ? Self.redactedSummary($0) : Self.actionSummary($0) },
             executionTime: Date().timeIntervalSince(startTime),
             wordsPerMinute: self.resolvedProfile == .human ? self.resolvedWordsPerMinute : nil,
             profile: self.resolvedProfile.rawValue,
@@ -567,6 +589,13 @@ struct TypeCommand: ActionOutputFormattable, ErrorHandlingCommand, OutputFormatt
             }
             print("⏱️  Completed in \(String(format: "%.2f", Date().timeIntervalSince(startTime)))s")
         }
+    }
+
+    private static func redactedSummary(_ action: TypeAction) -> TypeCommandActionSummary {
+        if case .text = action {
+            return TypeCommandActionSummary(kind: "text", value: nil)
+        }
+        return self.actionSummary(action)
     }
 
     private static func actionSummary(_ action: TypeAction) -> TypeCommandActionSummary {
@@ -646,6 +675,12 @@ extension TypeCommand: CommanderBindableCommand {
         }
         self.clear = values.flag("clear")
         self.acceptDispatched = values.flag("acceptDispatched")
+        self.secretStdin = values.flag("secretStdin")
+        if self.secretStdin {
+            var secret = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+            if secret.hasSuffix("\n") { secret.removeLast() }
+            self.secretText = secret
+        }
         self.target = try values.makeInteractionTargetOptions()
         self.focusOptions = try values.makeFocusOptions(includeBackgroundDelivery: true)
     }

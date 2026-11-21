@@ -58,6 +58,11 @@ extension TypeCommand: CommanderSignatureProviding {
                     help: clearHelp,
                     long: "clear"
                 ),
+                .commandFlag(
+                    "secretStdin",
+                    help: secretStdinHelp,
+                    long: "secret-stdin"
+                ),
             ],
             optionGroups: [
                 InteractionTargetOptions.commanderSignature(),
