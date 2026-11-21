@@ -78,6 +78,13 @@ public struct SetValueTool: MCPTool {
             let startTime = Date()
             let snapshot = try await self.effectiveSnapshot(request.snapshotId)
             effectiveSnapshotId = snapshot.id
+            if let element = await snapshot.getElement(byId: request.target),
+               let refusal = ActionGuard.shared.checkTextEntry(
+                   role: element.role,
+                   roleDescription: element.roleDescription)
+            {
+                throw SetValueToolError(refusal, errorCode: "GUARD_SECURE_FIELD")
+            }
             let expectedTarget = try MCPElementActionSnapshotAuthority.expectedTargetIdentity(snapshot)
             let (actionResult, invalidatedSnapshotId) = try await MCPElementActionSnapshotAuthority
                 .withConfirmedMutation(

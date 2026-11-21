@@ -33,6 +33,9 @@ public struct ActionTool: MCPTool {
                         "(custom actions need foreground authorization)."),
                 "snapshot": SchemaBuilder.string(
                     description: "Optional snapshot ID from `see` or `inspect_ui`; latest is used when omitted."),
+                "confirm": SchemaBuilder.string(
+                    description: "Guard confirmation. Pressing a consequential element (Submit, Upload, Delete, ...) " +
+                        "is refused until called again with confirm set to the exact label from the refusal."),
             ],
             required: ["on", "action"])
     }
@@ -68,6 +71,21 @@ public struct ActionTool: MCPTool {
             let startTime = Date()
             let snapshot = try await self.effectiveSnapshot(request.snapshotId)
             effectiveSnapshotId = snapshot.id
+            if Self.pressLikeActions.contains(request.actionName) || !request.actionName.hasPrefix("AX") {
+                let element = await snapshot.getElement(byId: request.target)
+                let labels: [String?] = request.actionName.hasPrefix("AX")
+                    ? [element?.title, element?.label, element?.description, element?.help, element?.value,
+                       element == nil ? request.target : nil]
+                    : [request.actionName]
+                if let refusal = ActionGuard.shared.checkClick(
+                    labels: labels,
+                    app: await snapshot.applicationName,
+                    isCoordinate: false,
+                    confirm: arguments.getString("confirm"))
+                {
+                    throw ActionToolError(refusal, errorCode: "GUARD_CONFIRMATION_REQUIRED")
+                }
+            }
             let expectedTarget = try MCPElementActionSnapshotAuthority.expectedTargetIdentity(snapshot)
             let (actionResult, invalidatedSnapshotId) = try await MCPElementActionSnapshotAuthority
                 .withConfirmedMutation(
@@ -99,6 +117,9 @@ public struct ActionTool: MCPTool {
             return ToolResponse.error("Failed to perform action: \(error.localizedDescription)")
         }
     }
+
+    /// Actions that act like a click, so the guard checks them the same way.
+    private static let pressLikeActions: Set<String> = ["AXPress", "AXConfirm", "AXPick", "AXOpen"]
 
     private func effectiveSnapshot(_ requestedSnapshotId: String?) async throws -> UISnapshot {
         if let requestedSnapshotId {
